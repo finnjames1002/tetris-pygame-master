@@ -2,6 +2,12 @@ import random
 import pygame
 import copy
 import random
+import threading
+
+class Individual:
+    def __init__(self, parameters, fitness=0):
+        self.parameters = parameters
+        self.fitness = fitness
 
 
 """
@@ -350,7 +356,7 @@ def draw_window(surface, grid, current_piece, score=0, last_score=0, level=0):
     # create a copy of the grid that doesn't include the current piece
     grid_copy = copy.deepcopy(grid)
     for x, y in convert_shape_format(current_piece):
-        if y > -1:
+        if y > -1 and x < 10:
             grid_copy[y][x] = (0, 0, 0)
 
     # draw shadow piece
@@ -391,39 +397,37 @@ def get_max_score():
 
     return score
 
+# Create a thread that runs find_best_move
+def find_best_move_thread(grid, piece, parameters, best_move):
+    best_move[0], best_move[1] = find_best_move(grid, piece, parameters)
 
-def main(window):
+def game_logic(window, parameters):
     locked_positions = {}
-    create_grid(locked_positions)
-
+    grid = create_grid(locked_positions)
     change_piece = False
     run = True
     current_piece = get_shape()
     next_piece = get_shape()
     clock = pygame.time.Clock()
     fall_time = 0
-    fall_speed = 0.35 # set to .35 for normal difficulty
+    fall_speed = 0.01
     level = 1
     level_time = 0
     score = 0
     last_score = get_max_score()
-    ai_enabled = False
+    ai_enabled = True
 
     while run:
-        # need to constantly make new grid as locked positions always change
         grid = create_grid(locked_positions)
-
-        # helps run the same on every computer
-        # add time since last tick() to fall_time
-        fall_time += clock.get_rawtime()  # returns in milliseconds
+        fall_time += clock.get_rawtime()
         level_time += clock.get_rawtime()
 
-        clock.tick()  # updates clock
+        clock.tick()
 
-        if level_time/6000 > 5:    # make the difficulty harder every 10 seconds
+        if level_time/6000 > 5:
             level_time = 0
             level += 1
-            if fall_speed > 0.15:   # until fall speed is 0.15
+            if fall_speed > 0.15:
                 fall_speed -= 0.01
 
         if fall_time / 1000 > fall_speed:
@@ -431,66 +435,29 @@ def main(window):
             current_piece.y += 1
             if not valid_space(current_piece, grid) and current_piece.y > 0:
                 current_piece.y -= 1
-                # since only checking for down - either reached bottom or hit another piece
-                # need to lock the piece position
-                # need to generate new piece
                 change_piece = True
 
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                run = False
-                pygame.display.quit()
-                quit()
-
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_a:  # press 'a' to toggle AI
-                    ai_enabled = not ai_enabled
-                if not ai_enabled:
-                    if event.key == pygame.K_LEFT:
-                        current_piece.x -= 1  # move x position left
-                        if not valid_space(current_piece, grid):
-                            current_piece.x += 1
-
-                    elif event.key == pygame.K_RIGHT:
-                        current_piece.x += 1  # move x position right
-                        if not valid_space(current_piece, grid):
-                            current_piece.x -= 1
-
-                    elif event.key == pygame.K_DOWN:
-                        # move shape down
-                        current_piece.y += 1
-                        if not valid_space(current_piece, grid):
-                            current_piece.y -= 1
-
-                    elif event.key == pygame.K_UP:
-                        # rotate shape
-                        current_piece.rotation = current_piece.rotation + 1 % len(current_piece.shape)
-                        if not valid_space(current_piece, grid):
-                            current_piece.rotation = current_piece.rotation - 1 % len(current_piece.shape)
-                    elif event.key == pygame.K_SPACE:
-                        while valid_space(current_piece, grid):
-                            current_piece.y += 1
-                        current_piece.y -= 1
-        
         if ai_enabled:
-                    if current_piece.y >= 3 and current_piece.shape != I:
-                        next_x, next_rotation = find_best_move(grid, current_piece)
-                        current_piece.x = next_x
-                        current_piece.rotation = next_rotation
-                        #print (current_piece.x, current_piece.rotation)
-                    elif current_piece.shape == I and current_piece.y >= 4:
-                        next_x, next_rotation = find_best_move(grid, current_piece)
-                        current_piece.x = next_x
-                        current_piece.rotation = next_rotation
-
+            best_move = [None, None]
+            
+            if current_piece.y >= 3 and current_piece.shape != I:
+                best_move[0], best_move[1] = find_best_move(grid, current_piece, parameters)
+            elif current_piece.shape == I and current_piece.y >= 4:
+                best_move[0], best_move[1] = find_best_move(grid, current_piece, parameters)
+            
+            if best_move[0] is not None and best_move[1] is not None:
+                current_piece.x = best_move[0]
+                current_piece.rotation = best_move[1]
+        
         piece_pos = convert_shape_format(current_piece)
 
         # draw the piece on the grid by giving color in the piece locations
         for i in range(len(piece_pos)):
             x, y = piece_pos[i]
-            if y >= 0:
+            if y > 0:
                 grid[y][x] = current_piece.color
 
+        
         if change_piece:  # if the piece is locked
             for pos in piece_pos:
                 p = (pos[0], pos[1])
@@ -508,23 +475,46 @@ def main(window):
             elif num_lines == 4:
                 score += 800 * level
             update_score(score)
-
             if last_score < score:
                 last_score = score
 
         draw_window(window, grid, current_piece, score, last_score, level)
         draw_next_shape(next_piece, window)
         pygame.display.update()
-
+        pygame.event.pump()
         if check_lost(locked_positions):
             run = False
-
     draw_text_middle('You Lost', 40, (255, 255, 255), window)
     pygame.display.update()
-    pygame.time.delay(2000)  # wait for 2 seconds
-    pygame.quit()
+    return score
 
-def evaluate_position(grid, piece, x, rotation):
+def main(window):
+    # Initialize the population
+    population = [Individual(random_parameters()) for _ in range(POPULATION_SIZE)]
+    generation = 0
+    best_individual = None
+
+    while generation < MAX_GENERATIONS:  # Run the genetic algorithm until manually stopped
+        for i in range(len(population)):
+            individual = population[i]
+            individual.fitness = game_logic(window, individual.parameters)
+            print(f"Parameters {i} fitness: {individual.fitness}")
+
+            # Update best individual if current individual is better
+            if best_individual is None or individual.fitness > best_individual.fitness:
+                best_individual = copy.deepcopy(individual)
+
+        new_population = [population[select([individual.fitness for individual in population])] for _ in range(POPULATION_SIZE)]
+        population = [Individual(crossover(new_population[i].parameters, new_population[(i + 1) % POPULATION_SIZE].parameters)) for i in range(POPULATION_SIZE)]
+        population = [Individual(mutate(individual.parameters)) for individual in population]
+
+        generation += 1
+        print(f"Generation {generation} complete")
+
+    print("Best parameters: ", best_individual.parameters)
+    print("Best fitness: ", best_individual.fitness)
+
+def evaluate_position(grid, piece, x, rotation, parameters):
     # Create a copy of the grid and place the piece in the given position and rotation
     grid_copy = [row[:] for row in grid]
     piece_copy = Piece(x, piece.y, piece.shape)
@@ -546,10 +536,12 @@ def evaluate_position(grid, piece, x, rotation):
     holes = get_holes(grid_copy)
     bumpiness = get_bumpiness(grid_copy)
 
+    return parameters[0]*height + parameters[1]*complete_lines + parameters[2]*holes + parameters[3]*bumpiness
+    
     # These weights can be tweaked depending on what you want the AI to prioritize
-    return -0.80 * height + 0.76 * complete_lines - 0.3 * holes - 0.18 * bumpiness
+    # return -0.80 * height + 0.76 * complete_lines - 0.3 * holes - 0.18 * bumpiness
 
-def find_best_move(grid, piece):
+def find_best_move(grid, piece,parameters):
     best_score = -float('inf')
     best_x = 0
     best_rotation = 0
@@ -557,14 +549,14 @@ def find_best_move(grid, piece):
     # Try each possible position and rotation
     for x in range(len(grid[0])):
         for rotation in range(len(piece.shape)):
-            score = evaluate_position(grid, piece, x, rotation)
+            score = evaluate_position(grid, piece, x, rotation,parameters)
             #print(x, rotation, score)
             if score > best_score:
                 best_score = score
                 best_x = x
                 best_rotation = rotation
 
-    #print (best_score)
+    
     return best_x, best_rotation
 
 def lock_positions(grid, piece):
@@ -614,23 +606,39 @@ def get_bumpiness(grid):
     return bumpiness
 
 
-POPULATION_SIZE = 100
-MAX_GENERATIONS = 100
-MIN_VALUE = -1.5
-MAX_VALUE = 1.5
+POPULATION_SIZE = 10
+MAX_GENERATIONS = 5
+MIN_MIN_VALUE = -1
+MIN_MAX_VALUE = 0
+MAX_MIN_VALUE = 0
+MAX_MAX_VALUE = 0.5
 NUM_PARAMETERS = 4
 MUTATION_AMOUNT = 0.1
 
 def random_parameters():
-    return [random.uniform(MIN_VALUE, MAX_VALUE) for _ in range(NUM_PARAMETERS)]
+    parameter_A = random.uniform(MIN_MIN_VALUE, MIN_MAX_VALUE)
+    parameter_B = random.uniform(MAX_MIN_VALUE, MAX_MAX_VALUE)  # Parameter B should be the only positive value
+    parameter_C = random.uniform(MIN_MAX_VALUE, MIN_MAX_VALUE)
+    parameter_D = random.uniform(MIN_MIN_VALUE, MIN_MAX_VALUE)
+    return [parameter_A, parameter_B, parameter_C, parameter_D]
 
 def select(fitnesses):
+    # Normalize the fitness values so they sum to 1
     total_fitness = sum(fitnesses)
-    selection = random.uniform(0, total_fitness)
-    for i, fitness in enumerate(fitnesses):
-        if selection < fitness:
+    normalized_fitnesses = [fitness / total_fitness for fitness in fitnesses]
+
+    # Choose a random number between 0 and 1
+    r = random.random()
+
+    # Select an individual such that the probability of selecting it is proportional to its fitness
+    cumulative_probability = 0.0
+    for i, fitness in enumerate(normalized_fitnesses):
+        cumulative_probability += fitness
+        if r < cumulative_probability:
             return i
-        selection -= fitness
+
+    # If no individual is selected (which should be very unlikely), return the last one
+    return len(fitnesses) - 1
 
 def crossover(individual1, individual2):
     return [(param1 + param2) / 2 for param1, param2 in zip(individual1, individual2)]
@@ -658,3 +666,4 @@ if __name__ == '__main__':
     pygame.display.set_caption('Tetris')
 
     main_menu(win)  # start game
+
