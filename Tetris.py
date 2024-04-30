@@ -402,7 +402,7 @@ def main(window):
     next_piece = get_shape()
     clock = pygame.time.Clock()
     fall_time = 0
-    fall_speed = 0.35 # set to .35 for normal difficulty
+    fall_speed = 0.01 # set to .35 for normal difficulty
     level = 1
     level_time = 0
     score = 0
@@ -547,7 +547,7 @@ def evaluate_position(grid, piece, x, rotation):
     bumpiness = get_bumpiness(grid_copy)
 
     # These weights can be tweaked depending on what you want the AI to prioritize
-    return -0.80 * height + 0.76 * complete_lines - 0.3 * holes - 0.18 * bumpiness
+    return -0.688 * height + 0.267 * complete_lines + 0.062 * holes - 0.1 * bumpiness
 
 def find_best_move(grid, piece):
     best_score = -float('inf')
@@ -612,31 +612,6 @@ def get_bumpiness(grid):
     for j in range(len(column_heights) - 1):  # -1 to ignore the last column
         bumpiness += abs(column_heights[j] - column_heights[j + 1])
     return bumpiness
-
-
-POPULATION_SIZE = 100
-MAX_GENERATIONS = 100
-MIN_VALUE = -1.5
-MAX_VALUE = 1.5
-NUM_PARAMETERS = 4
-MUTATION_AMOUNT = 0.1
-
-def random_parameters():
-    return [random.uniform(MIN_VALUE, MAX_VALUE) for _ in range(NUM_PARAMETERS)]
-
-def select(fitnesses):
-    total_fitness = sum(fitnesses)
-    selection = random.uniform(0, total_fitness)
-    for i, fitness in enumerate(fitnesses):
-        if selection < fitness:
-            return i
-        selection -= fitness
-
-def crossover(individual1, individual2):
-    return [(param1 + param2) / 2 for param1, param2 in zip(individual1, individual2)]
-
-def mutate(individual):
-    return [param + random.uniform(-MUTATION_AMOUNT, MUTATION_AMOUNT) for param in individual]
 
 def main_menu(window):
     run = True
