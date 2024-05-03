@@ -37,6 +37,7 @@ python3 Tetris.py
 ## Authors
 
 * **Rajat Dipta Biswas** - *Initial work*
+* **Finn McGrory** - *Additional features and AI implementation*
 
 See also the list of [contributors](https://github.com/rajatdiptabiswas/tetris-pygame/graphs/contributors) who participated in this project.
 
