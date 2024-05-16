@@ -1,5 +1,5 @@
 # Tetris
-Tetris game made with the Pygame library in Python.
+Tetris game made with the Pygame library in Python. This project is a fork of [this repo](https://github.com/rajatdiptabiswas/tetris-pygame) with additional features like ghost placement, improved scoring system and a working AI with a genetic algorithm for parameter tuning.
 
 
 ## Installing
@@ -37,6 +37,7 @@ python3 Tetris.py
 ## Authors
 
 * **Rajat Dipta Biswas** - *Initial work*
+* **Finn McGrory** - *Additional features and AI implementation*
 
 See also the list of [contributors](https://github.com/rajatdiptabiswas/tetris-pygame/graphs/contributors) who participated in this project.
 
