@@ -402,7 +402,7 @@ def main(window):
     next_piece = get_shape()
     clock = pygame.time.Clock()
     fall_time = 0
-    fall_speed = 0.01 # set to .35 for normal difficulty
+    fall_speed = 0.001 # set to .35 for normal difficulty
     level = 1
     level_time = 0
     score = 0
