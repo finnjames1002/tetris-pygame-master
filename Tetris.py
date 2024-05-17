@@ -420,7 +420,7 @@ def get_max_score():
 
     return score
 
-def game_logic(window, parameters):
+def game_logic(window, parameters, episode):
     locked_positions = {}
     grid = create_grid(locked_positions)
     change_piece = False
@@ -429,7 +429,7 @@ def game_logic(window, parameters):
     next_piece = get_shape()
     clock = pygame.time.Clock()
     fall_time = 0
-    fall_speed = 0.01
+    fall_speed = 0.3
     level = 1
     level_time = 0
     score = 0
@@ -491,12 +491,15 @@ def game_logic(window, parameters):
                     for pos in piece_pos:
                         p = (pos[0], pos[1])
                         locked_positions[p] = current_piece.color  # add the key and value in the dictionary
+                    print("REWARD FOR CHOSEN MOVE: ", reward)
                     last_grid = copy.deepcopy(grid)  # Store the last grid position
                     current_piece = next_piece
                     next_piece = get_shape()
                     change_piece = False
                     num_lines = clear_rows(grid, locked_positions)
                     last_score = score
+                    if num_lines >= 1:
+                        print("Lines cleared: ", num_lines, " Episode: ", episode)
                     if num_lines == 1:
                         score += 100 * level
                     elif num_lines == 2:
@@ -520,7 +523,7 @@ def game_logic(window, parameters):
 
 # Initialize your PyTorch model
 qnet = QNet()
-optimizer = optim.Adam(qnet.parameters())
+optimizer = optim.Adam(qnet.parameters(), lr = 0.1)
 criterion = nn.MSELoss()
 model_path = "model_weights.pth"
 
@@ -564,7 +567,7 @@ def worker(qnet, shared_weights, experiences_queue, epsilon):
 
     for episode in range(MAX_EPISODES):
         # Run the game logic and collect experiences
-        experiences = game_logic(window, qnet.parameters())
+        experiences = game_logic(window, qnet.parameters(), episode)
         # Send the experiences to the main process
         experiences_queue.put(experiences)
 
@@ -572,7 +575,7 @@ def worker(qnet, shared_weights, experiences_queue, epsilon):
         qnet.load_state_dict(shared_weights)
 
         # Decrease epsilon
-        epsilon -= 0.0025
+        epsilon -= 0.002
         if epsilon < 0.00:
             epsilon = 0.00
         print ("Episode: ", episode, " Epsilon: {:.3f}".format(epsilon), "Process: ", os.getpid())
@@ -580,8 +583,8 @@ def worker(qnet, shared_weights, experiences_queue, epsilon):
     return
 
 MAX_EPISODES = 1000
-NUM_WORKERS = 5
-epsilon = 0.2
+NUM_WORKERS = 1
+epsilon = 0.4
 def main(window=None):
     global epsilon
     # Load the trained model weights
@@ -644,16 +647,18 @@ def find_best_move(grid, piece, next_piece):
         copy_piece.y += 1
     copy_piece.y -= 1  # Adjust for the last increment
 
-    height = get_aggregate_height(grid)
-    complete_lines = get_complete_lines(grid)
-    holes = get_holes(grid)
-    bumpiness = get_bumpiness(grid)
-    row_comp = row_completeness(grid)
-    column_heights = get_column_heights(grid)
+    lock_positions(next_grid, copy_piece)
+
+    height = get_aggregate_height(next_grid)
+    complete_lines = get_complete_lines(next_grid)
+    holes = get_holes(next_grid)
+    bumpiness = get_bumpiness(next_grid)
+    row_comp = row_completeness(next_grid)
+    column_heights = get_column_heights(next_grid)
     height_dev = np.std(column_heights)
 
     # Update the Q-network
-    reward = -0.4 * height + 0.9 * complete_lines + 0.7 * row_comp - 0.2 * holes - 0.18 * bumpiness - 0.5 * height_dev    # The reward is the score difference
+    reward = -0.8 * height + 8.0 * complete_lines + 3 * row_comp - 0.2 * holes - 0.18 * bumpiness - 2.0 * height_dev    # The reward is the score difference
     # Update the minimum and maximum rewards
     global min_reward, max_reward
     min_reward = min(min_reward, reward)
@@ -664,7 +669,7 @@ def find_best_move(grid, piece, next_piece):
     done = False  # The game is over if run is False
     shapeInt = piece.getShape()
     nextShapeInt = next_piece.getShape()
-    #print("Reward: ", reward)
+    print("Reward: ", reward)
     update_qnet(grid, next_grid, shapeInt, nextShapeInt, action, reward, done)  # Pass the last grid and piece as the state
 
     return copy_piece.x, copy_piece.rotation, reward
