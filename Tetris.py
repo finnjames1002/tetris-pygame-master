@@ -429,7 +429,7 @@ def game_logic(window, parameters, episode):
     next_piece = get_shape()
     clock = pygame.time.Clock()
     fall_time = 0
-    fall_speed = 0.3
+    fall_speed = 0.01
     level = 1
     level_time = 0
     score = 0
@@ -464,13 +464,14 @@ def game_logic(window, parameters, episode):
             best_move = [None, None]
             
             if current_piece.y >= 3 and current_piece.shape != I:
-                best_move[0], best_move[1], reward = find_best_move(grid, current_piece, next_piece)
+                best_move[0], best_move[1], reward, action = find_best_move(grid, current_piece, next_piece)
             elif current_piece.shape == I and current_piece.y >= 4:
-                best_move[0], best_move[1], reward = find_best_move(grid, current_piece, next_piece)
+                best_move[0], best_move[1], reward, action = find_best_move(grid, current_piece, next_piece)
             
             if best_move[0] is not None and best_move[1] is not None:
                 current_piece.x = best_move[0]
                 current_piece.rotation = best_move[1]
+
 
         totalReward += reward
         piece_pos = convert_shape_format(current_piece)
@@ -481,7 +482,7 @@ def game_logic(window, parameters, episode):
             if y > 0:
                 grid[y][x] = current_piece.color
 
-        
+        #print("Reward: ", reward)
         if change_piece:  # if the piece is locked
             piece_pos = convert_shape_format(current_piece)
             for pos in piece_pos:
@@ -491,13 +492,17 @@ def game_logic(window, parameters, episode):
                     for pos in piece_pos:
                         p = (pos[0], pos[1])
                         locked_positions[p] = current_piece.color  # add the key and value in the dictionary
-                    print("REWARD FOR CHOSEN MOVE: ", reward)
+                    #print("REWARD FOR CHOSEN MOVE: ", reward)
                     last_grid = copy.deepcopy(grid)  # Store the last grid position
                     current_piece = next_piece
                     next_piece = get_shape()
                     change_piece = False
                     num_lines = clear_rows(grid, locked_positions)
                     last_score = score
+                    shapeInt = current_piece.getShape()
+                    nextShapeInt = next_piece.getShape()
+                    done = False
+                    update_qnet(last_grid, grid, shapeInt, nextShapeInt, action, reward * 10, done)
                     if num_lines >= 1:
                         print("Lines cleared: ", num_lines, " Episode: ", episode)
                     if num_lines == 1:
@@ -516,7 +521,7 @@ def game_logic(window, parameters, episode):
         pygame.event.pump()
         if check_lost(locked_positions):
             run = False
-            update_qnet(last_grid, grid, current_piece.getShape(), next_piece.getShape(), 0, -100, True)
+            update_qnet(last_grid, grid, current_piece.getShape(), next_piece.getShape(), 0, -1000, True)
     draw_text_middle('You Lost', 40, (255, 255, 255), window)
     pygame.display.update()
     return totalReward
@@ -575,16 +580,16 @@ def worker(qnet, shared_weights, experiences_queue, epsilon):
         qnet.load_state_dict(shared_weights)
 
         # Decrease epsilon
-        epsilon -= 0.002
+        epsilon -= 0.0025
         if epsilon < 0.00:
             epsilon = 0.00
         print ("Episode: ", episode, " Epsilon: {:.3f}".format(epsilon), "Process: ", os.getpid())
     print(f'Worker process {os.getpid()} finished')
     return
 
-MAX_EPISODES = 1000
-NUM_WORKERS = 1
-epsilon = 0.4
+MAX_EPISODES = 500
+NUM_WORKERS = 5
+epsilon = 1
 def main(window=None):
     global epsilon
     # Load the trained model weights
@@ -617,7 +622,7 @@ def main(window=None):
     torch.save(qnet.state_dict(), "model_weights.pth")
     print("Training complete")
 
-min_reward = -1
+min_reward = 0
 max_reward = 1
 
 def find_best_move(grid, piece, next_piece):
@@ -632,16 +637,26 @@ def find_best_move(grid, piece, next_piece):
     if action == 0:
         copy_piece.x = piece.x - 1
         if not valid_space(copy_piece, grid):
-            return None, None, 3
+            copy_piece.x = piece.x
     elif action == 1:
         copy_piece.x = piece.x + 1
         if not valid_space(copy_piece, grid):
-            return None, None, 3
+            copy_piece.x = piece.x
     elif action == 2:
         copy_piece.rotation = piece.rotation + 1
         if not valid_space(copy_piece, grid):
-            return None, None, 3
+            copy_piece.rotation = piece.rotation
     
+    reward = calculate_reward(next_grid, copy_piece)
+    shapeInt = piece.getShape()
+    nextShapeInt = next_piece.getShape()
+    done = False  # The game is over if run is False
+    #print("Reward: ", reward)
+    update_qnet(grid, next_grid, shapeInt, nextShapeInt, action, reward, done)  # Pass the last grid and piece as the state
+
+    return copy_piece.x, copy_piece.rotation, reward, action
+
+def calculate_reward(next_grid, copy_piece):
     # Drop the piece to the lowest valid position
     while valid_space(copy_piece, next_grid):
         copy_piece.y += 1
@@ -653,27 +668,20 @@ def find_best_move(grid, piece, next_piece):
     complete_lines = get_complete_lines(next_grid)
     holes = get_holes(next_grid)
     bumpiness = get_bumpiness(next_grid)
-    row_comp = row_completeness(next_grid)
     column_heights = get_column_heights(next_grid)
     height_dev = np.std(column_heights)
-
-    # Update the Q-network
-    reward = -0.8 * height + 8.0 * complete_lines + 3 * row_comp - 0.2 * holes - 0.18 * bumpiness - 2.0 * height_dev    # The reward is the score difference
+    row_scores = grid_completeness_score(next_grid)
+    #print("Height: ", height, " Complete lines: ", complete_lines, " Holes: ", holes, " Bumpiness: ", bumpiness, " Height deviation: ", height_dev, " Row scores: ", row_scores)
+    # Update the Q-network  
+    reward = complete_lines * 10  + row_scores * 1 - height_dev * 0.8 - holes * 0.3 - bumpiness * 0.2
     # Update the minimum and maximum rewards
     global min_reward, max_reward
     min_reward = min(min_reward, reward)
     max_reward = max(max_reward, reward)
 
     # Normalize the reward
-    reward = 2 * ((reward - min_reward) / (max_reward - min_reward)) - 1
-    done = False  # The game is over if run is False
-    shapeInt = piece.getShape()
-    nextShapeInt = next_piece.getShape()
-    print("Reward: ", reward)
-    update_qnet(grid, next_grid, shapeInt, nextShapeInt, action, reward, done)  # Pass the last grid and piece as the state
-
-    return copy_piece.x, copy_piece.rotation, reward
-
+    return 2 * ((reward - min_reward) / (max_reward - min_reward)) - 1
+    
 def get_aggregate_height(grid):
     aggregate_height = 0
     for j in range(len(grid[0])):
@@ -689,14 +697,6 @@ def get_complete_lines(grid):
         if (0, 0, 0) not in grid[i]:
             complete_lines += 1
     return complete_lines
-
-def row_completeness(grid):
-    total_score = 0
-    for row in grid:
-        filled_cells = sum(cell != (0, 0, 0) for cell in row)  # Count the number of filled cells in the row
-        score = filled_cells / len(row)  # Calculate the score for the row
-        total_score += score
-    return total_score  # Convert the total score to an integer
 
 def get_holes(grid):
     holes = 0
@@ -728,6 +728,19 @@ def get_column_heights(grid):
         else:
             column_heights.append(0)
     return column_heights
+
+def row_completeness_score(row):
+    score = 0
+    for cell in row:
+        if cell != (0, 0, 0):  # If the cell is filled
+            score = score * 2 + 1  # Double the score and add 1
+    return score
+
+def grid_completeness_score(grid):
+    total_score = 0
+    for row in grid:
+        total_score += row_completeness_score(row)
+    return total_score
 
 def lock_positions(grid, piece):
     formatted = convert_shape_format(piece)
