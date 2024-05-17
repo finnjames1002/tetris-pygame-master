@@ -4,11 +4,31 @@ import copy
 import random
 import threading
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+import torch.multiprocessing as mp
+import numpy as np
+
+class QNet(nn.Module):
+    def __init__(self):
+        super(QNet, self).__init__()
+        self.fc1 = nn.Linear(607, 128)  # Assuming a 10x20 grid as input
+        self.fc2 = nn.Linear(128, 64)
+        self.fc3 = nn.Linear(64, 4)  # Assuming 4 possible actions
+
+    def forward(self, x):
+        x = x.view(-1)  # Flatten the input
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
+
 class Individual:
     def __init__(self, parameters, fitness=0):
         self.parameters = parameters
         self.fitness = fitness
-
 
 """
 10 x 20 grid
@@ -151,7 +171,6 @@ T = [['.....',
 shapes = [S, Z, I, O, J, L, T]
 shape_colors = [(0, 255, 0), (255, 0, 0), (0, 255, 255), (255, 255, 0), (255, 165, 0), (0, 0, 255), (128, 0, 128)]
 
-
 # class to represent each of the pieces
 
 
@@ -162,6 +181,9 @@ class Piece(object):
         self.shape = shape
         self.color = shape_colors[shapes.index(shape)]  # choose color from the shape_color list
         self.rotation = 0  # chooses the rotation according to index
+    
+    def getShape(self):
+        return shapes.index(self.shape)  # Assuming self.shape is a list of all shapes and self.rotation is the current shape
 
 
 # initialise the grid
@@ -397,10 +419,6 @@ def get_max_score():
 
     return score
 
-# Create a thread that runs find_best_move
-def find_best_move_thread(grid, piece, parameters, best_move):
-    best_move[0], best_move[1] = find_best_move(grid, piece, parameters)
-
 def game_logic(window, parameters):
     locked_positions = {}
     grid = create_grid(locked_positions)
@@ -414,13 +432,17 @@ def game_logic(window, parameters):
     level = 1
     level_time = 0
     score = 0
-    last_score = get_max_score()
+    best_score = get_max_score()
     ai_enabled = True
+    global epsilon
+    totalReward = 0
 
+    
     while run:
         grid = create_grid(locked_positions)
         fall_time += clock.get_rawtime()
         level_time += clock.get_rawtime()
+        reward = 0
 
         clock.tick()
 
@@ -441,14 +463,15 @@ def game_logic(window, parameters):
             best_move = [None, None]
             
             if current_piece.y >= 3 and current_piece.shape != I:
-                best_move[0], best_move[1] = find_best_move(grid, current_piece, parameters)
+                best_move[0], best_move[1], reward = find_best_move(grid, current_piece, next_piece)
             elif current_piece.shape == I and current_piece.y >= 4:
-                best_move[0], best_move[1] = find_best_move(grid, current_piece, parameters)
+                best_move[0], best_move[1], reward = find_best_move(grid, current_piece, next_piece)
             
             if best_move[0] is not None and best_move[1] is not None:
                 current_piece.x = best_move[0]
                 current_piece.rotation = best_move[1]
-        
+
+        totalReward += reward
         piece_pos = convert_shape_format(current_piece)
 
         # draw the piece on the grid by giving color in the piece locations
@@ -459,115 +482,142 @@ def game_logic(window, parameters):
 
         
         if change_piece:  # if the piece is locked
+            piece_pos = convert_shape_format(current_piece)
             for pos in piece_pos:
-                p = (pos[0], pos[1])
-                locked_positions[p] = current_piece.color       # add the key and value in the dictionary
-            current_piece = next_piece
-            next_piece = get_shape()
-            change_piece = False
-            num_lines = clear_rows(grid, locked_positions)
-            if num_lines == 1:
-                score += 100 * level
-            elif num_lines == 2:
-                score += 300 * level
-            elif num_lines == 3:
-                score += 500 * level
-            elif num_lines == 4:
-                score += 800 * level
-            update_score(score)
-            if last_score < score:
-                last_score = score
+                x, y = pos
+                # Check if the space below is out of the grid or occupied by another piece
+                if y + 1 >= row or (x, y + 1) in locked_positions:
+                    for pos in piece_pos:
+                        p = (pos[0], pos[1])
+                        locked_positions[p] = current_piece.color  # add the key and value in the dictionary
+                    last_grid = copy.deepcopy(grid)  # Store the last grid position
+                    current_piece = next_piece
+                    next_piece = get_shape()
+                    change_piece = False
+                    num_lines = clear_rows(grid, locked_positions)
+                    last_score = score
+                    if num_lines == 1:
+                        score += 100 * level
+                    elif num_lines == 2:
+                        score += 300 * level
+                    elif num_lines == 3:
+                        score += 500 * level
+                    elif num_lines == 4:
+                        score += 800 * level
+                    break  # Stop the loop if a block cannot be placed
 
-        draw_window(window, grid, current_piece, score, last_score, level)
+        draw_window(window, grid, current_piece, score, best_score, level)
         draw_next_shape(next_piece, window)
         pygame.display.update()
         pygame.event.pump()
         if check_lost(locked_positions):
             run = False
+            update_qnet(last_grid, grid, current_piece.getShape(), next_piece.getShape(), 0, -100, True)
     draw_text_middle('You Lost', 40, (255, 255, 255), window)
     pygame.display.update()
-    return score
+    return totalReward
 
+# Initialize your PyTorch model
+qnet = QNet()
+optimizer = optim.Adam(qnet.parameters())
+criterion = nn.MSELoss()
+model_path = "model_weights.pth"
+
+def epsilon_greedy(grid, piece, epsilon):
+    if np.random.rand() < epsilon:
+        return np.random.randint(4)  # Take a random action
+    else:
+        with torch.no_grad():
+            shape = piece.getShape()
+            state = create_state(grid,shape)  # Convert to tensor and flatten
+            action_values = qnet(state)  # Get predicted action values from the Q-network
+            return action_values.argmax().item()  # Return the action with the highest value
+        
+def create_state(grid, piece):
+    state = torch.tensor(grid, dtype=torch.float32).view(-1)  # Convert to tensor and flatten
+    piece_one_hot = [0]*7  # Assuming there are 7 different pieces
+    piece_one_hot[piece] = 1  # Set the element corresponding to the piece to 1
+    piece_one_hot = torch.tensor(piece_one_hot, dtype=torch.float32)
+    state = torch.cat((state, piece_one_hot))  # Append the one-hot encoding to the state
+    return state
+
+def update_qnet(grid, next_grid, current_piece, next_piece , action, reward, done):
+    state = create_state(grid, current_piece)
+    next_state = create_state(next_grid, next_piece)
+    
+    target = reward + 0.99 * torch.max(qnet(next_state)) * (not done)  # Calculate the target Q-value
+    prediction = qnet(state)[action]  # Calculate the predicted Q-value
+    loss = criterion(prediction, target)  # Calculate the loss
+    optimizer.zero_grad()  # Reset the gradients
+    loss.backward()  # Calculate the gradients
+    optimizer.step()  # Update the weights
+
+MAX_EPISODES = 500
+epsilon = 0.2
 def main(window):
-    # Initialize the population
-    population = [Individual(random_parameters()) for _ in range(POPULATION_SIZE)]
-    generation = 0
-    best_individual = None
+    global epsilon
+    # Load the trained model weights
+    try: 
+        qnet.load_state_dict(torch.load("model_weights.pth"))
+    except FileNotFoundError:
+        print("Model weights not found. Training a new model...")
+        for param in qnet.parameters():
+            torch.nn.init.normal_(param)
+    qnet.eval()
 
-    while generation < MAX_GENERATIONS:  # Run the genetic algorithm until manually stopped
-        for i in range(len(population)):
-            individual = population[i]
-            individual.fitness = game_logic(window, individual.parameters)
-            print(f"Parameters {i} fitness: {individual.fitness}")
+    for episode in range(MAX_EPISODES):
+        reward = game_logic(window, qnet.parameters())
+        print(f"Episode {episode} complete")
+        print("Reward: ", reward)
+        epsilon -= 0.0025
 
-            # Update best individual if current individual is better
-            if best_individual is None or individual.fitness > best_individual.fitness:
-                best_individual = copy.deepcopy(individual)
+    torch.save(qnet.state_dict(), "model_weights.pth")
+    print("Training complete")
 
-        new_population = [population[select([individual.fitness for individual in population])] for _ in range(POPULATION_SIZE)]
-        population = [Individual(crossover(new_population[i].parameters, new_population[(i + 1) % POPULATION_SIZE].parameters)) for i in range(POPULATION_SIZE)]
-        population = [Individual(mutate(individual.parameters)) for individual in population]
+def find_best_move(grid, piece, next_piece):
+    # Convert the grid into a suitable format for the ANN
+    grid_for_ann = [cell for row in grid for cell in row]
+    grid_for_ann = torch.tensor(grid_for_ann, dtype=torch.float32).view(-1)
 
-        generation += 1
-        print(f"Generation {generation} complete")
-
-    print("Best parameters: ", best_individual.parameters)
-    print("Best fitness: ", best_individual.fitness)
-
-def evaluate_position(grid, piece, x, rotation, parameters):
-    # Create a copy of the grid and place the piece in the given position and rotation
-    grid_copy = [row[:] for row in grid]
-    piece_copy = Piece(x, piece.y, piece.shape)
-    piece_copy.rotation = rotation
-
+    
+    copy_piece = copy.deepcopy(piece)
+    next_grid = copy.deepcopy(grid)
+    
+    action = epsilon_greedy(grid, piece, epsilon)
+    if action == 0:
+        copy_piece.x = piece.x - 1
+        if not valid_space(copy_piece, grid):
+            return None, None, 3
+    elif action == 1:
+        copy_piece.x = piece.x + 1
+        if not valid_space(copy_piece, grid):
+            return None, None, 3
+    elif action == 2:
+        copy_piece.rotation = piece.rotation + 1
+        if not valid_space(copy_piece, grid):
+            return None, None, 3
+    
     # Drop the piece to the lowest valid position
-    while valid_space(piece_copy, grid_copy):
-        piece_copy.y += 1
-    piece_copy.y -= 1  # Adjust for the last increment
+    while valid_space(copy_piece, next_grid):
+        copy_piece.y += 1
+    copy_piece.y -= 1  # Adjust for the last increment
 
-    if not valid_space(piece_copy, grid_copy):
-        return -float('inf')  # return a very low score if the position is not valid
+    height = get_aggregate_height(grid)
+    complete_lines = get_complete_lines(grid)
+    holes = get_holes(grid)
+    bumpiness = get_bumpiness(grid)
+    row_comp = row_completeness(grid)
+    max_column = get_max_column_height(grid)
 
-    lock_positions(grid_copy, piece_copy)
+    # Update the Q-network
+    reward = -0.80 * height + 0.76 * complete_lines + 0.5 * row_comp - 0.3 * holes - 0.18 * bumpiness - 0.5 * max_column   # The reward is the score difference
+    done = False  # The game is over if run is False
+    shapeInt = piece.getShape()
+    nextShapeInt = next_piece.getShape()
+    #print("Reward: ", reward)
+    update_qnet(grid, next_grid, shapeInt, nextShapeInt, action, reward, done)  # Pass the last grid and piece as the state
 
-    # Calculate the score based on the criteria
-    height = get_aggregate_height(grid_copy)
-    complete_lines = get_complete_lines(grid_copy)
-    holes = get_holes(grid_copy)
-    bumpiness = get_bumpiness(grid_copy)
-
-    return parameters[0]*height + parameters[1]*complete_lines + parameters[2]*holes + parameters[3]*bumpiness
-    
-    # These weights can be tweaked depending on what you want the AI to prioritize
-    # return -0.80 * height + 0.76 * complete_lines - 0.3 * holes - 0.18 * bumpiness
-
-def find_best_move(grid, piece,parameters):
-    best_score = -float('inf')
-    best_x = 0
-    best_rotation = 0
-
-    # Try each possible position and rotation
-    for x in range(len(grid[0])):
-        for rotation in range(len(piece.shape)):
-            score = evaluate_position(grid, piece, x, rotation,parameters)
-            #print(x, rotation, score)
-            if score > best_score:
-                best_score = score
-                best_x = x
-                best_rotation = rotation
-
-    
-    return best_x, best_rotation
-
-def lock_positions(grid, piece):
-    formatted = convert_shape_format(piece)
-
-    for pos in formatted:
-        p = (pos[0], pos[1])
-        if p[1] > -1:
-            grid[p[1]][p[0]] = piece.color
-
-    return grid
+    return copy_piece.x, copy_piece.rotation, reward
 
 def get_aggregate_height(grid):
     aggregate_height = 0
@@ -584,6 +634,14 @@ def get_complete_lines(grid):
         if (0, 0, 0) not in grid[i]:
             complete_lines += 1
     return complete_lines
+
+def row_completeness(grid):
+    total_score = 0
+    for row in grid:
+        filled_cells = sum(cell != (0, 0, 0) for cell in row)  # Count the number of filled cells in the row
+        score = filled_cells / len(row)  # Calculate the score for the row
+        total_score += score
+    return total_score  # Convert the total score to an integer
 
 def get_holes(grid):
     holes = 0
@@ -605,22 +663,22 @@ def get_bumpiness(grid):
         bumpiness += abs(column_heights[j] - column_heights[j + 1])
     return bumpiness
 
+def get_max_column_height(grid):
+    max_height = 0
+    for col in zip(*grid):  # Transpose the grid to iterate over columns
+        height = sum(1 for cell in col if cell != 0)  # Count the number of occupied cells
+        max_height = max(max_height, height)
+    return max_height
 
-POPULATION_SIZE = 10
-MAX_GENERATIONS = 5
-MIN_MIN_VALUE = -1
-MIN_MAX_VALUE = 0
-MAX_MIN_VALUE = 0
-MAX_MAX_VALUE = 0.5
-NUM_PARAMETERS = 4
-MUTATION_AMOUNT = 0.1
+def lock_positions(grid, piece):
+    formatted = convert_shape_format(piece)
 
-def random_parameters():
-    parameter_A = random.uniform(MIN_MIN_VALUE, MIN_MAX_VALUE)
-    parameter_B = random.uniform(MAX_MIN_VALUE, MAX_MAX_VALUE)  # Parameter B should be the only positive value
-    parameter_C = random.uniform(MIN_MAX_VALUE, MIN_MAX_VALUE)
-    parameter_D = random.uniform(MIN_MIN_VALUE, MIN_MAX_VALUE)
-    return [parameter_A, parameter_B, parameter_C, parameter_D]
+    for pos in formatted:
+        p = (pos[0], pos[1])
+        if p[1] > -1:
+            grid[p[1]][p[0]] = piece.color
+
+    return grid
 
 def select(fitnesses):
     # Normalize the fitness values so they sum to 1
@@ -639,12 +697,6 @@ def select(fitnesses):
 
     # If no individual is selected (which should be very unlikely), return the last one
     return len(fitnesses) - 1
-
-def crossover(individual1, individual2):
-    return [(param1 + param2) / 2 for param1, param2 in zip(individual1, individual2)]
-
-def mutate(individual):
-    return [param + random.uniform(-MUTATION_AMOUNT, MUTATION_AMOUNT) for param in individual]
 
 def main_menu(window):
     run = True
