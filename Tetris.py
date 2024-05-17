@@ -1,3 +1,4 @@
+import os
 import random
 import pygame
 import copy
@@ -552,9 +553,36 @@ def update_qnet(grid, next_grid, current_piece, next_piece , action, reward, don
     loss.backward()  # Calculate the gradients
     optimizer.step()  # Update the weights
 
-MAX_EPISODES = 500
+def worker(qnet, shared_weights, experiences_queue, epsilon):
+    # Initialize Pygame and create the window
+    pygame.init()
+    window = pygame.display.set_mode((s_width, s_height))
+    print(f'Worker process {os.getpid()} started')
+
+    # Load the shared weights into the local Q-network
+    qnet.load_state_dict(shared_weights)
+
+    for episode in range(MAX_EPISODES):
+        # Run the game logic and collect experiences
+        experiences = game_logic(window, qnet.parameters())
+        # Send the experiences to the main process
+        experiences_queue.put(experiences)
+
+        # Load the updated weights into the local Q-network
+        qnet.load_state_dict(shared_weights)
+
+        # Decrease epsilon
+        epsilon -= 0.0025
+        if epsilon < 0.00:
+            epsilon = 0.00
+        print ("Episode: ", episode, " Epsilon: {:.3f}".format(epsilon), "Process: ", os.getpid())
+    print(f'Worker process {os.getpid()} finished')
+    return
+
+MAX_EPISODES = 1000
+NUM_WORKERS = 5
 epsilon = 0.2
-def main(window):
+def main(window=None):
     global epsilon
     # Load the trained model weights
     try: 
@@ -565,21 +593,35 @@ def main(window):
             torch.nn.init.normal_(param)
     qnet.eval()
 
-    for episode in range(MAX_EPISODES):
-        reward = game_logic(window, qnet.parameters())
-        print(f"Episode {episode} complete")
-        print("Reward: ", reward)
-        epsilon -= 0.0025
+    # Create a queue for collecting experiences
+    experiences_queue = mp.Queue()
+
+    # Create a copy of the Q-network weights in shared memory
+    shared_weights = qnet.state_dict()
+    for tensor in shared_weights.values():
+        tensor.share_memory_()
+
+    # Create and start the worker processes
+    workers = []
+    for _ in range(NUM_WORKERS):
+        worker_process = mp.Process(target=worker, args=(qnet, shared_weights, experiences_queue, epsilon))
+        worker_process.start()
+        workers.append(worker_process)
+
+    for worker_process in workers:
+        worker_process.join()
 
     torch.save(qnet.state_dict(), "model_weights.pth")
     print("Training complete")
+
+min_reward = -1
+max_reward = 1
 
 def find_best_move(grid, piece, next_piece):
     # Convert the grid into a suitable format for the ANN
     grid_for_ann = [cell for row in grid for cell in row]
     grid_for_ann = torch.tensor(grid_for_ann, dtype=torch.float32).view(-1)
 
-    
     copy_piece = copy.deepcopy(piece)
     next_grid = copy.deepcopy(grid)
     
@@ -607,10 +649,18 @@ def find_best_move(grid, piece, next_piece):
     holes = get_holes(grid)
     bumpiness = get_bumpiness(grid)
     row_comp = row_completeness(grid)
-    max_column = get_max_column_height(grid)
+    column_heights = get_column_heights(grid)
+    height_dev = np.std(column_heights)
 
     # Update the Q-network
-    reward = -0.80 * height + 0.76 * complete_lines + 0.5 * row_comp - 0.3 * holes - 0.18 * bumpiness - 0.5 * max_column   # The reward is the score difference
+    reward = -0.4 * height + 0.9 * complete_lines + 0.7 * row_comp - 0.2 * holes - 0.18 * bumpiness - 0.5 * height_dev    # The reward is the score difference
+    # Update the minimum and maximum rewards
+    global min_reward, max_reward
+    min_reward = min(min_reward, reward)
+    max_reward = max(max_reward, reward)
+
+    # Normalize the reward
+    reward = 2 * ((reward - min_reward) / (max_reward - min_reward)) - 1
     done = False  # The game is over if run is False
     shapeInt = piece.getShape()
     nextShapeInt = next_piece.getShape()
@@ -663,12 +713,16 @@ def get_bumpiness(grid):
         bumpiness += abs(column_heights[j] - column_heights[j + 1])
     return bumpiness
 
-def get_max_column_height(grid):
-    max_height = 0
-    for col in zip(*grid):  # Transpose the grid to iterate over columns
-        height = sum(1 for cell in col if cell != 0)  # Count the number of occupied cells
-        max_height = max(max_height, height)
-    return max_height
+def get_column_heights(grid):
+    column_heights = []
+    for j in range(len(grid[0])):
+        for i in range(len(grid)):
+            if grid[i][j] != (0, 0, 0):
+                column_heights.append(len(grid) - i)
+                break
+        else:
+            column_heights.append(0)
+    return column_heights
 
 def lock_positions(grid, piece):
     formatted = convert_shape_format(piece)
@@ -716,6 +770,7 @@ def main_menu(window):
 if __name__ == '__main__':
     win = pygame.display.set_mode((s_width, s_height))
     pygame.display.set_caption('Tetris')
-
-    main_menu(win)  # start game
+    draw_text_middle('Running workers', 50, (255, 255, 255), win)
+    pygame.display.update()
+    main(win)  # start game
 
