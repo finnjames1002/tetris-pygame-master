@@ -3,7 +3,6 @@ import pygame
 import copy
 import random
 
-
 """
 10 x 20 grid
 play_height = 2 * play_width
@@ -391,7 +390,6 @@ def get_max_score():
 
     return score
 
-
 def main(window):
     locked_positions = {}
     create_grid(locked_positions)
@@ -402,7 +400,7 @@ def main(window):
     next_piece = get_shape()
     clock = pygame.time.Clock()
     fall_time = 0
-    fall_speed = 0.001 # set to .35 for normal difficulty
+    fall_speed = 0.05 # set to .35 for normal difficulty
     level = 1
     level_time = 0
     score = 0
@@ -474,12 +472,12 @@ def main(window):
         
         if ai_enabled:
                     if current_piece.y >= 3 and current_piece.shape != I:
-                        next_x, next_rotation = find_best_move(grid, current_piece)
+                        next_x, next_rotation = find_optimal_move(grid, current_piece)
                         current_piece.x = next_x
                         current_piece.rotation = next_rotation
                         #print (current_piece.x, current_piece.rotation)
                     elif current_piece.shape == I and current_piece.y >= 4:
-                        next_x, next_rotation = find_best_move(grid, current_piece)
+                        next_x, next_rotation = find_optimal_move(grid, current_piece)
                         current_piece.x = next_x
                         current_piece.rotation = next_rotation
 
@@ -549,7 +547,7 @@ def evaluate_position(grid, piece, x, rotation):
     # These weights can be tweaked depending on what you want the AI to prioritize
     return -0.688 * height + 0.267 * complete_lines + 0.062 * holes - 0.1 * bumpiness
 
-def find_best_move(grid, piece):
+def find_optimal_move(grid, piece):
     best_score = -float('inf')
     best_x = 0
     best_rotation = 0
