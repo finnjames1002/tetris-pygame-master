@@ -63,7 +63,7 @@ class CustomNet(nn.Module):
 
         self.fc1 = nn.Linear(total_features, 128)
         self.fc2 = nn.Linear(128, 512)
-        self.fc3 = nn.Linear(512, max_x * max_rotation)  # Change this to 1 if the final output is 1-dimensional
+        self.fc3 = nn.Linear(512, 4)
         self.dropout = nn.Dropout(0.25)
         self.batch_norm = nn.BatchNorm2d(128)
         self.max_x = max_x
@@ -91,12 +91,8 @@ class CustomNet(nn.Module):
         x = self.dropout(x)
         x = self.fc3(x)
 
-        # Reshape the output tensor to have one dimension for xs and another for rotations
-        x = x.view(-1, self.max_x, self.max_rotation)
-
-        # Reshape the tensor to be 1D and contain pairs [x, rotation]
-        x = x.view(-1, 2)
-
+        x = x.view(-1)
+        
         return x
 
 
@@ -555,9 +551,48 @@ def emulate_placement(grid, piece):
     lock_positions(grid_copy, piece_copy)
     return grid_copy
 
+def calculateNextGrid(grid, piece):
+    piece_copy = copy.deepcopy(piece)
+    grid_copy = copy.deepcopy(grid)
+    # Drop the piece to the lowest valid position
+    if valid_space(piece_copy, grid_copy):
+        piece_copy.y += 1
+    if piece_copy.y < 0:
+        piece_copy.y = 0
+    if piece_copy.y == 0:
+        return grid_copy
+    
+    bestReward = -1000000
+    for actions in range(4):
+        if actions == 0:
+            piece_copy.x -= 1
+            if not valid_space(piece_copy, grid_copy):
+                piece_copy.x += 1
+            reward = calculate_reward(grid_copy, piece_copy)
+            piece_copy.x = piece.x
+        elif actions == 1:
+            piece_copy.x += 1
+            if not valid_space(piece_copy, grid_copy):
+                piece_copy.x -= 1
+            reward = calculate_reward(grid_copy, piece_copy)
+            piece_copy.x = piece.x
+        elif actions == 2:
+            for rotation in range(4):
+                piece_copy.rotation = (piece_copy.rotation + rotation) % len(piece_copy.shape)
+                if not valid_space(piece_copy, grid_copy):
+                    piece_copy.rotation = (piece_copy.rotation - rotation) % len(piece_copy.shape)
+                reward = calculate_reward(grid_copy, piece_copy)
+                piece_copy.rotation = piece.rotation
+        elif actions == 3:
+            reward = calculate_reward(grid_copy, piece_copy)
+        
+        if reward > bestReward:
+            bestReward = reward
+
+    return grid_copy
+
 def game_logic(window, parameters, episode, id, randomize, agent):
-    actions = 0
-    actions_taken[id] = []
+    actions_taken = 0
     experiences = []
     locked_positions = {}
     grid = create_grid(locked_positions)
@@ -567,7 +602,7 @@ def game_logic(window, parameters, episode, id, randomize, agent):
     next_piece = get_shape()
     clock = pygame.time.Clock()
     fall_time = 0
-    fall_speed = 0.01
+    fall_speed = 0.001
     level = 1
     level_time = 0
     score = 0
@@ -577,6 +612,8 @@ def game_logic(window, parameters, episode, id, randomize, agent):
     bestRotation = 0
     step = 0
     move = True
+    moves = 0
+    quit = False
     global epsilon
     
     totalReward = 0
@@ -592,6 +629,7 @@ def game_logic(window, parameters, episode, id, randomize, agent):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 run = False
+                quit = True
         grid = create_grid(locked_positions)
         fall_time += clock.get_rawtime()
         level_time += clock.get_rawtime()
@@ -620,25 +658,29 @@ def game_logic(window, parameters, episode, id, randomize, agent):
                     best_move = [None, None]
                     
                     if current_piece.y >= 3 and current_piece.shape != I:
-                        best_move[0], best_move[1], reward, action, bestX, bestRotation = find_best_move(grid, current_piece, next_piece, actions, randomize, agent)
+                        best_move[0], best_move[1], actions = find_best_move(grid, current_piece, next_piece, actions_taken, randomize, agent)
                     elif current_piece.shape == I and current_piece.y >= 4:
-                        best_move[0], best_move[1], reward, action, bestX, bestRotation = find_best_move(grid, current_piece, next_piece, actions, randomize, agent)
+                        best_move[0], best_move[1], actions= find_best_move(grid, current_piece, next_piece, actions_taken, randomize, agent)
                     
                     if best_move[0] is not None and best_move[1] is not None:
                         current_piece.x = best_move[0]
                         current_piece.rotation = best_move[1]
-                    
+                    moves +=1
                     move = False
+                    
             
-            next_grid = emulate_placement(grid, current_piece)
+            next_grid = calculateNextGrid(grid, current_piece)
             shapeInt = current_piece.getShape()
             nextShapeInt = next_piece.getShape()
             done = False
-            update_qnet(grid, next_grid, shapeInt, nextShapeInt, bestX, bestRotation, reward + 0.01, step, done)
+            grid_copy = copy.deepcopy(grid) 
+            piece_copy = copy.deepcopy(current_piece)
+            reward = calculate_reward(grid_copy, piece_copy)
+            update_qnet(grid, next_grid,reward + 0.01, step, done)
 
-            actions += 1
-            
-            totalReward += reward
+        actions_taken += 1
+        
+        totalReward += reward
         
         
         piece_pos = convert_shape_format(current_piece)
@@ -671,9 +713,11 @@ def game_logic(window, parameters, episode, id, randomize, agent):
                     nextShapeInt = next_piece.getShape()
                     done = False
                     step +=1
+                    #print ("Reward for chosen move: ", reward + 0.01 * 5)
+                    #update_qnet(grid, next_grid, reward + 0.01 * 5, step, done)
                     
                     if num_lines >= 1:
-                        if actions > 2000:
+                        if actions_taken > 2000:
                             print("Lines cleared: ", num_lines, " Episode: ", episode, "Cleared by Agent:", id, "In mode: ANN", "Actions taken: ", actions)
                         else:
                             print("Lines cleared: ", num_lines, " Episode: ", episode, "Cleared by Agent:", id, "In mode: OPT", "Actions taken: ", actions)
@@ -697,16 +741,16 @@ def game_logic(window, parameters, episode, id, randomize, agent):
         if check_lost(locked_positions):
             run = False
             done = True
-            update_qnet(grid, next_grid, shapeInt, nextShapeInt, bestX, bestRotation, -1, step, done)
+            update_qnet(grid, next_grid, -1, step, done)
     draw_text_middle('You Lost', 40, (255, 255, 255), window)
     pygame.display.update()
-    return []
+    return [], quit
 
 # Initialize your PyTorch model
 #qnet = QNet(10,4)
 qnet = CustomNet(10,4)
 qnet.to(device)
-optimizer = optim.Adam(qnet.parameters(), lr = 0.001)
+optimizer = optim.Adam(qnet.parameters(), lr = 0.1)
 criterion = nn.MSELoss()
 model_path = "model_weights.pth"
 
@@ -726,6 +770,8 @@ def epsilon_greedy(grid, piece, epsilon, moves, randomize, agent):
         actions = []
         actions.append(3)
     if random.random() < epsilon and moves < 2000:
+        best_x, best_rotation =  find_optimal_move(grid, piece)  # Take the best action
+        return generate_actions(piece.x, piece.rotation, best_x, best_rotation), False, best_x, best_rotation
         actions = []
         actions.append(np.random.randint(0, 3))  # Move left or right
         if actions[0] == 0:
@@ -748,26 +794,32 @@ def epsilon_greedy(grid, piece, epsilon, moves, randomize, agent):
         best_rotation = max(0, best_rotation)
         best_rotation = min(3, best_rotation)
         return actions, False, best_x, best_rotation
-        best_x, best_rotation =  find_optimal_move(grid, piece)  # Take the best action
-        return generate_actions(piece.x, piece.rotation, best_x, best_rotation), False, best_x, best_rotation
     else:
         with torch.no_grad():
             copy_piece = copy.deepcopy(piece)
             # Convert to tensor and flatten
             state = create_state(grid).to(device)
+            
             x = qnet(state)
-            #print("X: ", x)
-            # Find the index of the maximum score
-            index = x.argmax()
-            #print("Index: ", index)
-            # Calculate the total number of rotations
-            total_rotations = 4  # replace with the actual total number of rotations if it's not 4
-
-            # Convert the index to best_x and best_rotation
-            best_x = index // total_rotations
-            best_rotation = index % total_rotations
-            print("Best x: ", best_x.item(), " Best rotation: ", best_rotation.item())
-            return generate_actions(copy_piece.x, copy_piece.rotation, best_x.item(), best_rotation.item()), True, best_x.item(), best_rotation.item()
+            action = torch.argmax(x).item()
+            actions = []
+            actions.append(action)
+            if action == 0:
+                best_x = piece.x - 1
+                best_rotation = piece.rotation
+            elif action == 1:
+                best_x = piece.x + 1
+                best_rotation = piece.rotation
+            elif action == 2:
+                best_x = piece.x
+                if (piece.rotation == 3):
+                    best_rotation = 0
+                else:
+                    best_rotation = piece.rotation + 1
+            else:
+                best_x = piece.x
+                best_rotation = piece.rotation
+            return actions, True, best_x, best_rotation
         
 def generate_actions(current_x, current_rotation, best_x, best_rotation):
     actions = []
@@ -789,6 +841,56 @@ def generate_actions(current_x, current_rotation, best_x, best_rotation):
 
     return actions
         
+def find_best_move(grid, piece, next_piece, moves, randomize ,agent):
+    copy_piece = copy.deepcopy(piece)
+    next_grid = copy.deepcopy(grid)
+    actions, decider, bestX, bestRotation = epsilon_greedy(grid, piece, epsilon, moves, randomize, agent)
+    reward = 0
+
+    for action in actions:
+        if action == 0:
+            copy_piece.x -= 1
+            if not valid_space(copy_piece, grid):
+                copy_piece.x += 1
+        elif action == 1:
+            copy_piece.x += 1
+            if not valid_space(copy_piece, grid):
+                copy_piece.x -= 1
+        elif action == 2:
+            copy_piece.rotation = (copy_piece.rotation + 1) % len(copy_piece.shape)
+            if not valid_space(copy_piece, grid):
+                #print("Invalid rotation: ", copy_piece.rotation)
+                copy_piece.rotation = (copy_piece.rotation - 1) % len(copy_piece.shape)
+        
+    return copy_piece.x, copy_piece.rotation, actions
+
+
+
+def calculate_reward(next_grid, copy_piece):
+    # Drop the piece to the lowest valid position
+    while valid_space(copy_piece, next_grid):
+        copy_piece.y += 1
+    copy_piece.y -= 1  # Adjust for the last increment
+
+    lock_positions(next_grid, copy_piece)
+
+    height = get_aggregate_height(next_grid)
+    complete_lines = get_complete_lines(next_grid)
+    holes = get_holes(next_grid)
+    bumpiness = get_bumpiness(next_grid)
+    column_heights = get_column_heights(next_grid)
+    height_dev = np.std(column_heights)
+    row_scores = grid_completeness_score(next_grid)
+    #print("Height: ", height, " Complete lines: ", complete_lines, " Holes: ", holes, " Bumpiness: ", bumpiness, " Height deviation: ", height_dev, " Row scores: ", row_scores)
+    # Update the Q-network  
+    # Calculate the raw reward
+    reward = (-0.25 * height) + (1.5 * complete_lines) + (-0.18 * holes) + (-0.9 * bumpiness)
+
+    #print("Reward: ", reward)
+    #print("Normalised Reward: ", normReward)
+
+    return reward
+
 def create_state(grid):
     grid_height = 20
     grid_width = 10
@@ -811,7 +913,7 @@ def create_state(grid):
     state = torch.tensor(grid_for_ann, dtype=torch.float32).view(1, 1, grid_height, grid_width)  # Reshape the grid into a single-channel image
     return state
 
-def update_qnet(grid, next_grid, current_piece, next_piece , target_position, target_rotation, reward, step, done):
+def update_qnet(grid, next_grid, reward, step, done):
     
     state = create_state(grid).to(device)
     next_state = create_state(next_grid).to(device)
@@ -830,11 +932,20 @@ def update_qnet(grid, next_grid, current_piece, next_piece , target_position, ta
     # Get the predicted Q-values for the next state
     next_q_values = qnet(next_state)
 
+    
+    # Convert reward and done to tensors
+    reward = torch.tensor([reward], device=device)
+    # Convert done to an integer tensor
+    done = torch.tensor([done], dtype=torch.int32, device=device)
+
     # Compute the target Q-values
     target_q_values = reward + (1 * next_q_values * (1 - done))
-
+    
     # Compute the loss between the predicted and target Q-values
     loss = F.mse_loss(predicted_q_values, target_q_values)
+
+    
+    print("Step: ", step, " Loss: ", loss.item(), " Reward: ", reward)
 
     # Backpropagate the loss
     optimizer.zero_grad()
@@ -855,7 +966,9 @@ def worker(qnet, shared_weights, experiences_queue, epsilon, id, random, ag):
     for episode in range(MAX_EPISODES):
         experiences = []
         # Run the game logic and collect experiences
-        experiences = game_logic(window, qnet.parameters(), episode, id, random, ag)
+        experiences, quit = game_logic(window, qnet.parameters(), episode, id, random, ag)
+        if quit:
+            break
         # Send the experiences to the main process
         for experience in experiences:
             grid = experience[0]
@@ -888,9 +1001,9 @@ def worker(qnet, shared_weights, experiences_queue, epsilon, id, random, ag):
     os._exit(0)
     
 
-MAX_EPISODES = 1500
-NUM_WORKERS = 3
-epsilon = 1
+MAX_EPISODES = 500
+NUM_WORKERS = 1
+epsilon = 0.0
 actions_taken = [[] for _ in range(NUM_WORKERS)]
 def main(random, ag):
     global epsilon
@@ -955,57 +1068,7 @@ def runAgents(random, ag):
     print("Final score: ", finalScore)
     return finalScore
 
-def find_best_move(grid, piece, next_piece, moves, randomize ,agent):
-    copy_piece = copy.deepcopy(piece)
-    next_grid = copy.deepcopy(grid)
-    actions, decider, bestX, bestRotation = epsilon_greedy(grid, piece, epsilon, moves, randomize, agent)
-    reward = 0
 
-    for action in actions:
-        if action == 0:
-            copy_piece.x -= 1
-            if not valid_space(copy_piece, grid):
-                copy_piece.x += 1
-        elif action == 1:
-            copy_piece.x += 1
-            if not valid_space(copy_piece, grid):
-                copy_piece.x -= 1
-        elif action == 2:
-            copy_piece.rotation = (copy_piece.rotation + 1) % len(copy_piece.shape)
-            if not valid_space(copy_piece, grid):
-                #print("Invalid rotation: ", copy_piece.rotation)
-                copy_piece.rotation = (copy_piece.rotation - 1) % len(copy_piece.shape)
-            
-                
-    reward = calculate_reward(next_grid, copy_piece)
-        
-    return copy_piece.x, copy_piece.rotation, reward, actions, int(bestX), int(bestRotation)
-
-# Initialize the min and max rewards to None
-min_reward = 1
-max_reward = 0
-
-def calculate_reward(next_grid, copy_piece):
-    global min_reward, max_reward
-    # Drop the piece to the lowest valid position
-    while valid_space(copy_piece, next_grid):
-        copy_piece.y += 1
-    copy_piece.y -= 1  # Adjust for the last increment
-
-    lock_positions(next_grid, copy_piece)
-
-    height = get_aggregate_height(next_grid)
-    complete_lines = get_complete_lines(next_grid)
-    holes = get_holes(next_grid)
-    bumpiness = get_bumpiness(next_grid)
-    column_heights = get_column_heights(next_grid)
-    height_dev = np.std(column_heights)
-    row_scores = grid_completeness_score(next_grid)
-    #print("Height: ", height, " Complete lines: ", complete_lines, " Holes: ", holes, " Bumpiness: ", bumpiness, " Height deviation: ", height_dev, " Row scores: ", row_scores)
-    # Update the Q-network  
-    # Calculate the raw reward
-    reward = -0.51 * height + 0.76 * complete_lines + -0.36 * holes + -0.18 * bumpiness
-    return reward
     
 def get_aggregate_height(grid):
     aggregate_height = 0
