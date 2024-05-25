@@ -1,12 +1,8 @@
-from csv import writer
-from math import exp
 import os
 import random
-from tracemalloc import start
 from typing import final
 import pygame
 import copy
-import random
 from Tetris import find_optimal_move
 
 import torch
@@ -504,7 +500,6 @@ def draw_window(surface, grid, current_piece, score=0, last_score=0, level=0, be
 
     # pygame.display.update()
 
-
 # update the score txt file with high score
 def update_score(new_score):
     score = get_max_score()
@@ -515,7 +510,6 @@ def update_score(new_score):
         else:
             file.write(str(score))
 
-
 # get the high score from the file
 def get_max_score():
     with open(filepath, 'r') as file:
@@ -523,8 +517,6 @@ def get_max_score():
         score = int(lines[0].strip())   # remove \n
 
     return score
-
-
 
 gameScore = 0
 def getFinalScore():
@@ -589,7 +581,7 @@ def calculateNextGrid(grid, piece):
 
     return grid_copy
 
-def game_logic(window, parameters, episode, id, randomize, agent, ml):
+def game_logic(window, parameters, episode, id, randomize, agent, ml, step):
     actions_taken = 0
     locked_positions = {}
     grid = create_grid(locked_positions)
@@ -607,7 +599,6 @@ def game_logic(window, parameters, episode, id, randomize, agent, ml):
     ai_enabled = True
     bestX = 0
     bestRotation = 0
-    step = 0
     move = True
     moves = 0
     quit = False
@@ -646,8 +637,6 @@ def game_logic(window, parameters, episode, id, randomize, agent, ml):
             current_piece.y += 1
             move = True
             
-
-
             if not valid_space(current_piece, grid) and current_piece.y > 0:
                 current_piece.y -= 1
                 change_piece = True
@@ -675,7 +664,7 @@ def game_logic(window, parameters, episode, id, randomize, agent, ml):
             grid_copy = copy.deepcopy(grid) 
             piece_copy = copy.deepcopy(current_piece)
             reward = calculate_reward(grid_copy, piece_copy)
-            loss = update_qnet(grid, next_grid,reward + 0.01, step, done)
+            loss = update_qnet(grid, next_grid,reward + 0.1, step, done)
 
             actions_taken += 1
             losses.append(loss)
@@ -701,19 +690,12 @@ def game_logic(window, parameters, episode, id, randomize, agent, ml):
                     for pos in piece_pos:
                         p = (pos[0], pos[1])
                         locked_positions[p] = current_piece.color  # add the key and value in the dictionary
-                    #print("REWARD FOR CHOSEN MOVE: ", reward)
-                    last_grid = copy.deepcopy(grid)  # Store the last grid position
                     current_piece = next_piece
                     next_piece = get_shape()
                     change_piece = False
                     num_lines, locked_positions = clear_rows(grid, locked_positions)
-                    last_score = score
-                    shapeInt = current_piece.getShape()
-                    nextShapeInt = next_piece.getShape()
                     done = False
                     step +=1
-                    #print ("Reward for chosen move: ", reward + 0.01 * 5)
-                    #update_qnet(grid, next_grid, reward + 0.01 * 5, step, done)
                     
                     if num_lines >= 1:
                         if actions_taken > 2000:
@@ -740,13 +722,14 @@ def game_logic(window, parameters, episode, id, randomize, agent, ml):
         if check_lost(locked_positions):
             run = False
             done = True
-            update_qnet(grid, next_grid, -10, step, done)
+            update_qnet(grid, next_grid, -0.5, step, done)
+            totalReward -= 0.5
     draw_text_middle('You Lost', 40, (255, 255, 255), window)
     pygame.display.update()
     if not ml:
-        return [], quit
+        return [], quit, step
     else:
-        return actions_taken, losses
+        return actions_taken, losses, finalScore, totalReward
 
 # Initialize your PyTorch model
 #qnet = QNet(10,4)
@@ -754,7 +737,7 @@ qnet = CustomNet(10,4)
 target_qnet = CustomNet(10,4)
 target_qnet.to(device)
 qnet.to(device)
-optimizer = optim.Adam(qnet.parameters(), lr = 0.0001)
+optimizer = optim.Adam(qnet.parameters(), lr = 0.005)
 criterion = nn.MSELoss()
 model_path = "model_weights.pth"
 
@@ -773,7 +756,7 @@ def epsilon_greedy(grid, piece, epsilon, moves, randomize, agent):
     if agent and moves >= 2000:
         actions = []
         actions.append(3)
-    if random.random() < epsilon and moves < 2000:
+    if random.random() < epsilon and moves < 1250:
         actions = []
         actions.append(np.random.randint(0, 3))  # Move randomly
         return actions
@@ -846,25 +829,32 @@ def calculate_reward(next_grid, copy_piece):
     complete_lines = get_complete_lines(next_grid)
     holes = get_holes(next_grid)
     bumpiness = get_bumpiness(next_grid)
+    col_heights = get_column_heights(next_grid)
+    completeness_score = grid_completeness_score(next_grid)
 
     # Define maximum possible values for scaling
-    MAX_HEIGHT = 20
+    MAX_HEIGHT = 200
     MAX_LINES = 4
     MAX_HOLES = 200
     MAX_BUMPINESS = 20
+    MAX_COL_HEIGHTS = 20
+    MAX_COMPLETENESS = 200
+
 
     # Scale the components
     scaled_height = height / MAX_HEIGHT
     scaled_complete_lines = complete_lines / MAX_LINES
     scaled_holes = holes / MAX_HOLES
     scaled_bumpiness = bumpiness / MAX_BUMPINESS
+    scaled_col_heights = max(col_heights) / MAX_COL_HEIGHTS
+    scaled_completeness = completeness_score / MAX_COMPLETENESS
 
     # Compute the scaled reward
-    reward = (-0.25 * scaled_height) + (1.5 * scaled_complete_lines) + (-0.18 * scaled_holes) + (-0.9 * scaled_bumpiness)
+    reward = (-0.2 * scaled_height) + (0.7 * scaled_complete_lines) + (0.1 * scaled_completeness) + (-0.3 * scaled_holes) + (-0.2 * scaled_bumpiness) + (-0.8 * scaled_col_heights)
 
     # Further normalization (optional)
     expected_min_reward = -1.0
-    expected_max_reward = 1.5
+    expected_max_reward = 1.0
     normalized_reward = (reward - expected_min_reward) / (expected_max_reward - expected_min_reward)
 
     return normalized_reward
@@ -891,7 +881,7 @@ def create_state(grid):
     state = torch.tensor(grid_for_ann, dtype=torch.float32).view(1, 1, grid_height, grid_width)  # Reshape the grid into a single-channel image
     return state
 
-TARGET_UPDATE_FREQUENCY = 10
+TARGET_UPDATE_FREQUENCY = 400
 
 def update_target_network(qnet, target_qnet):
     target_qnet.load_state_dict(qnet.state_dict())
@@ -923,7 +913,7 @@ def update_qnet(grid, next_grid, reward, step, done):
     done = torch.tensor([done], dtype=torch.float32, device=device)
 
     # Compute the target Q-values
-    target_q_values = reward + (0.95 * max_next_q_values * (1 - done))
+    target_q_values = reward + (0.5 * max_next_q_values * (1 - done))
     
     # Ensure the predicted Q-values correspond to the action taken
     if predicted_q_values.dim() > 1:
@@ -943,20 +933,21 @@ def update_qnet(grid, next_grid, reward, step, done):
     return loss.item()
     
 
-def worker(qnet, shared_weights, experiences_queue, epsilon, id, random, ag):
+def worker(qnet, shared_weights, experiences_queue, ep, id, random, ag):
+    global epsilon
     # Initialize Pygame and create the window
     pygame.init()
     window = pygame.display.set_mode((s_width, s_height))
     print(f'Worker process {os.getpid()} started')
     # Load the shared weights into the local Q-network
     qnet.load_state_dict(shared_weights)
-
-
+    epsilon = 1.0
+    step = 0
     writer = SummaryWriter(f'runs/worker_{id}')
     for episode in range(MAX_EPISODES):
         experiences = []
         # Run the game logic and collect experiences
-        experiences, quit = game_logic(window, qnet.parameters(), episode, id, random, ag, False)
+        experiences, quit, step = game_logic(window, qnet.parameters(), episode, id, random, ag, False, step)
         if quit:
             break
         # Send the experiences to the main process
@@ -980,7 +971,7 @@ def worker(qnet, shared_weights, experiences_queue, epsilon, id, random, ag):
         qnet.load_state_dict(shared_weights)
 
         # Decrease epsilon
-        epsilon -= 0.005
+        epsilon -= 0.05
         if epsilon < 0.00:
             epsilon = 0.00
         print ("Episode: ", episode, " Epsilon: {:.3f}".format(epsilon), "Process: ", os.getpid())
@@ -990,8 +981,7 @@ def worker(qnet, shared_weights, experiences_queue, epsilon, id, random, ag):
     pygame.quit()
     os._exit(0)
     
-
-MAX_EPISODES = 1
+MAX_EPISODES = 100
 NUM_WORKERS = 1
 epsilon = 0.0
 actions_taken = [[] for _ in range(NUM_WORKERS)]
@@ -1005,7 +995,7 @@ def main(random, ag):
         print("Model weights not found. Training a new model...")
         for param in qnet.parameters():
             torch.nn.init.normal_(param)
-    qnet.eval()
+    qnet.train()
 
     print("Random: ", random, "Agent: ", ag)
     
@@ -1051,16 +1041,17 @@ def getScores(random, ag):
         print("Model weights not found. Training a new model...")
         for param in qnet.parameters():
             torch.nn.init.normal_(param)
+    
     # Load the shared weights into the local Q-network
     qnet.load_state_dict(qnet.state_dict())
-    finalScore = game_logic(window, qnet.parameters(), 0, 0, random, ag, False)
+    finalScore = game_logic(window, qnet.parameters(), 0, 0, random, ag, False, 0)
     finalScore = getFinalScore()
     print("Final score: ", finalScore)
     return finalScore
 
 def getLoss(i, x):
     global epsilon
-    epsilon = x - (i / 100)
+    epsilon = x - (i / 50)
     if epsilon < 0.00:
         epsilon = 0.00
     pygame.init()
@@ -1072,19 +1063,19 @@ def getLoss(i, x):
         print("Model weights not found. Training a new model...")
         for param in qnet.parameters():
             torch.nn.init.normal_(param)
+            
     # Load the shared weights into the local Q-network
     qnet.load_state_dict(qnet.state_dict())
     # Create a copy of the Q-network weights in shared memory
     shared_weights = qnet.state_dict()
     for tensor in shared_weights.values():
         tensor.share_memory_()
-
-    moves,losses = game_logic(window, shared_weights, i, 0, False, False, True)
+    qnet.eval()
+    moves,losses,finalScore,totalReward = game_logic(window, shared_weights, i, 0, False, False, True, 0)
     
     torch.save(qnet.state_dict(), "model_weights.pth")
     print("Training complete")
-    return moves,losses
-
+    return moves,losses,finalScore,totalReward
 
     
 def get_aggregate_height(grid):
