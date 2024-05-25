@@ -537,9 +537,6 @@ def evaluate_position(grid, piece, x, rotation, parameters):
     bumpiness = get_bumpiness(grid_copy)
 
     return parameters[0]*height + parameters[1]*complete_lines + parameters[2]*holes + parameters[3]*bumpiness
-    
-    # These weights can be tweaked depending on what you want the AI to prioritize
-    # return -0.80 * height + 0.76 * complete_lines - 0.3 * holes - 0.18 * bumpiness
 
 def find_best_move(grid, piece,parameters):
     best_score = -float('inf')
@@ -556,7 +553,6 @@ def find_best_move(grid, piece,parameters):
                 best_x = x
                 best_rotation = rotation
 
-    
     return best_x, best_rotation
 
 def lock_positions(grid, piece):
@@ -611,7 +607,7 @@ MAX_GENERATIONS = 5
 MIN_MIN_VALUE = -1
 MIN_MAX_VALUE = 0
 MAX_MIN_VALUE = 0
-MAX_MAX_VALUE = 0.5
+MAX_MAX_VALUE = 1
 NUM_PARAMETERS = 4
 MUTATION_AMOUNT = 0.1
 
