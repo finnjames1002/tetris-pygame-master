@@ -2,13 +2,11 @@ from csv import writer
 from math import exp
 import os
 import random
-import stat
 from tracemalloc import start
 from typing import final
 import pygame
 import copy
 import random
-import threading
 from Tetris import find_optimal_move
 
 import torch
@@ -591,9 +589,8 @@ def calculateNextGrid(grid, piece):
 
     return grid_copy
 
-def game_logic(window, parameters, episode, id, randomize, agent):
+def game_logic(window, parameters, episode, id, randomize, agent, ml):
     actions_taken = 0
-    experiences = []
     locked_positions = {}
     grid = create_grid(locked_positions)
     change_piece = False
@@ -614,6 +611,7 @@ def game_logic(window, parameters, episode, id, randomize, agent):
     move = True
     moves = 0
     quit = False
+    losses = []
     global epsilon
     
     totalReward = 0
@@ -647,6 +645,8 @@ def game_logic(window, parameters, episode, id, randomize, agent):
             fall_time = 0
             current_piece.y += 1
             move = True
+            
+
 
             if not valid_space(current_piece, grid) and current_piece.y > 0:
                 current_piece.y -= 1
@@ -666,21 +666,20 @@ def game_logic(window, parameters, episode, id, randomize, agent):
                         current_piece.x = best_move[0]
                         current_piece.rotation = best_move[1]
                     moves +=1
-                    move = False
+                    if moves % 4 == 0:
+                        move = False
                     
             
             next_grid = calculateNextGrid(grid, current_piece)
-            shapeInt = current_piece.getShape()
-            nextShapeInt = next_piece.getShape()
             done = False
             grid_copy = copy.deepcopy(grid) 
             piece_copy = copy.deepcopy(current_piece)
             reward = calculate_reward(grid_copy, piece_copy)
-            update_qnet(grid, next_grid,reward + 0.01, step, done)
+            loss = update_qnet(grid, next_grid,reward + 0.01, step, done)
 
-        actions_taken += 1
-        
-        totalReward += reward
+            actions_taken += 1
+            losses.append(loss)
+            totalReward += reward
         
         
         piece_pos = convert_shape_format(current_piece)
@@ -741,16 +740,21 @@ def game_logic(window, parameters, episode, id, randomize, agent):
         if check_lost(locked_positions):
             run = False
             done = True
-            update_qnet(grid, next_grid, -1, step, done)
+            update_qnet(grid, next_grid, -10, step, done)
     draw_text_middle('You Lost', 40, (255, 255, 255), window)
     pygame.display.update()
-    return [], quit
+    if not ml:
+        return [], quit
+    else:
+        return actions_taken, losses
 
 # Initialize your PyTorch model
 #qnet = QNet(10,4)
 qnet = CustomNet(10,4)
+target_qnet = CustomNet(10,4)
+target_qnet.to(device)
 qnet.to(device)
-optimizer = optim.Adam(qnet.parameters(), lr = 0.1)
+optimizer = optim.Adam(qnet.parameters(), lr = 0.0001)
 criterion = nn.MSELoss()
 model_path = "model_weights.pth"
 
@@ -758,45 +762,26 @@ def epsilon_greedy(grid, piece, epsilon, moves, randomize, agent):
     if randomize and moves < 2000:
         actions = []
         actions.append(np.random.randint(0, 3))  # Move left or right
-        return actions, False, 0, 0
+        return actions
     if randomize and moves >= 2000:
         actions = []
         actions.append(3)  # Move left or right
         return actions, False, 0, 0
     if agent and moves < 2000:
         best_x, best_rotation =  find_optimal_move(grid, piece)  # Take the best action
-        return generate_actions(piece.x, piece.rotation, best_x, best_rotation), False, best_x, best_rotation
+        return generate_actions(piece.x, piece.rotation, best_x, best_rotation)
     if agent and moves >= 2000:
         actions = []
         actions.append(3)
     if random.random() < epsilon and moves < 2000:
-        best_x, best_rotation =  find_optimal_move(grid, piece)  # Take the best action
-        return generate_actions(piece.x, piece.rotation, best_x, best_rotation), False, best_x, best_rotation
         actions = []
-        actions.append(np.random.randint(0, 3))  # Move left or right
-        if actions[0] == 0:
-            best_x = piece.x - 1
-            best_rotation = piece.rotation
-        elif actions[0] == 1:
-            best_x = piece.x + 1
-            best_rotation = piece.rotation
-        elif actions[0] == 2:
-            best_x = piece.x
-            if (piece.rotation == 3):
-                best_rotation = 0
-            else:
-                best_rotation = piece.rotation + 1
-        else:
-            best_x = piece.x
-            best_rotation = piece.rotation
-        best_x = max(0, best_x)
-        best_x = min(9, best_x)
-        best_rotation = max(0, best_rotation)
-        best_rotation = min(3, best_rotation)
-        return actions, False, best_x, best_rotation
+        actions.append(np.random.randint(0, 3))  # Move randomly
+        return actions
+        best_x, best_rotation =  find_optimal_move(grid, piece)  # Take the best action
+        return generate_actions(piece.x, piece.rotation, best_x, best_rotation)
+        
     else:
         with torch.no_grad():
-            copy_piece = copy.deepcopy(piece)
             # Convert to tensor and flatten
             state = create_state(grid).to(device)
             
@@ -804,22 +789,7 @@ def epsilon_greedy(grid, piece, epsilon, moves, randomize, agent):
             action = torch.argmax(x).item()
             actions = []
             actions.append(action)
-            if action == 0:
-                best_x = piece.x - 1
-                best_rotation = piece.rotation
-            elif action == 1:
-                best_x = piece.x + 1
-                best_rotation = piece.rotation
-            elif action == 2:
-                best_x = piece.x
-                if (piece.rotation == 3):
-                    best_rotation = 0
-                else:
-                    best_rotation = piece.rotation + 1
-            else:
-                best_x = piece.x
-                best_rotation = piece.rotation
-            return actions, True, best_x, best_rotation
+            return actions
         
 def generate_actions(current_x, current_rotation, best_x, best_rotation):
     actions = []
@@ -844,7 +814,7 @@ def generate_actions(current_x, current_rotation, best_x, best_rotation):
 def find_best_move(grid, piece, next_piece, moves, randomize ,agent):
     copy_piece = copy.deepcopy(piece)
     next_grid = copy.deepcopy(grid)
-    actions, decider, bestX, bestRotation = epsilon_greedy(grid, piece, epsilon, moves, randomize, agent)
+    actions = epsilon_greedy(grid, piece, epsilon, moves, randomize, agent)
     reward = 0
 
     for action in actions:
@@ -864,8 +834,6 @@ def find_best_move(grid, piece, next_piece, moves, randomize ,agent):
         
     return copy_piece.x, copy_piece.rotation, actions
 
-
-
 def calculate_reward(next_grid, copy_piece):
     # Drop the piece to the lowest valid position
     while valid_space(copy_piece, next_grid):
@@ -878,18 +846,28 @@ def calculate_reward(next_grid, copy_piece):
     complete_lines = get_complete_lines(next_grid)
     holes = get_holes(next_grid)
     bumpiness = get_bumpiness(next_grid)
-    column_heights = get_column_heights(next_grid)
-    height_dev = np.std(column_heights)
-    row_scores = grid_completeness_score(next_grid)
-    #print("Height: ", height, " Complete lines: ", complete_lines, " Holes: ", holes, " Bumpiness: ", bumpiness, " Height deviation: ", height_dev, " Row scores: ", row_scores)
-    # Update the Q-network  
-    # Calculate the raw reward
-    reward = (-0.25 * height) + (1.5 * complete_lines) + (-0.18 * holes) + (-0.9 * bumpiness)
 
-    #print("Reward: ", reward)
-    #print("Normalised Reward: ", normReward)
+    # Define maximum possible values for scaling
+    MAX_HEIGHT = 20
+    MAX_LINES = 4
+    MAX_HOLES = 200
+    MAX_BUMPINESS = 20
 
-    return reward
+    # Scale the components
+    scaled_height = height / MAX_HEIGHT
+    scaled_complete_lines = complete_lines / MAX_LINES
+    scaled_holes = holes / MAX_HOLES
+    scaled_bumpiness = bumpiness / MAX_BUMPINESS
+
+    # Compute the scaled reward
+    reward = (-0.25 * scaled_height) + (1.5 * scaled_complete_lines) + (-0.18 * scaled_holes) + (-0.9 * scaled_bumpiness)
+
+    # Further normalization (optional)
+    expected_min_reward = -1.0
+    expected_max_reward = 1.5
+    normalized_reward = (reward - expected_min_reward) / (expected_max_reward - expected_min_reward)
+
+    return normalized_reward
 
 def create_state(grid):
     grid_height = 20
@@ -913,12 +891,15 @@ def create_state(grid):
     state = torch.tensor(grid_for_ann, dtype=torch.float32).view(1, 1, grid_height, grid_width)  # Reshape the grid into a single-channel image
     return state
 
+TARGET_UPDATE_FREQUENCY = 10
+
+def update_target_network(qnet, target_qnet):
+    target_qnet.load_state_dict(qnet.state_dict())
+
 def update_qnet(grid, next_grid, reward, step, done):
-    
     state = create_state(grid).to(device)
     next_state = create_state(next_grid).to(device)
 
-    # Check if qnet and state are not None
     if qnet is None:
         print("qnet is None")
         return
@@ -929,28 +910,37 @@ def update_qnet(grid, next_grid, reward, step, done):
     # Get the predicted Q-values for the current state
     predicted_q_values = qnet(state)
 
-    # Get the predicted Q-values for the next state
-    next_q_values = qnet(next_state)
+    # Get the predicted Q-values for the next state from the target network
+    with torch.no_grad():
+        next_q_values = target_qnet(next_state)
+        if next_q_values.dim() == 1:
+            max_next_q_values = next_q_values
+        else:
+            max_next_q_values = next_q_values.max(dim=1)[0]
 
-    
     # Convert reward and done to tensors
     reward = torch.tensor([reward], device=device)
-    # Convert done to an integer tensor
-    done = torch.tensor([done], dtype=torch.int32, device=device)
+    done = torch.tensor([done], dtype=torch.float32, device=device)
 
     # Compute the target Q-values
-    target_q_values = reward + (1 * next_q_values * (1 - done))
+    target_q_values = reward + (0.95 * max_next_q_values * (1 - done))
     
+    # Ensure the predicted Q-values correspond to the action taken
+    if predicted_q_values.dim() > 1:
+        predicted_q_values = predicted_q_values.squeeze()
+
     # Compute the loss between the predicted and target Q-values
-    loss = F.mse_loss(predicted_q_values, target_q_values)
+    loss = criterion(predicted_q_values, target_q_values)
 
-    
-    print("Step: ", step, " Loss: ", loss.item(), " Reward: ", reward)
+    print("Step: ", step, " Loss: ", loss.item(), " Reward: ", reward.item())
 
-    # Backpropagate the loss
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
+    
+    if step % TARGET_UPDATE_FREQUENCY == 0:
+        update_target_network(qnet, target_qnet)
+    return loss.item()
     
 
 def worker(qnet, shared_weights, experiences_queue, epsilon, id, random, ag):
@@ -966,7 +956,7 @@ def worker(qnet, shared_weights, experiences_queue, epsilon, id, random, ag):
     for episode in range(MAX_EPISODES):
         experiences = []
         # Run the game logic and collect experiences
-        experiences, quit = game_logic(window, qnet.parameters(), episode, id, random, ag)
+        experiences, quit = game_logic(window, qnet.parameters(), episode, id, random, ag, False)
         if quit:
             break
         # Send the experiences to the main process
@@ -1001,7 +991,7 @@ def worker(qnet, shared_weights, experiences_queue, epsilon, id, random, ag):
     os._exit(0)
     
 
-MAX_EPISODES = 500
+MAX_EPISODES = 1
 NUM_WORKERS = 1
 epsilon = 0.0
 actions_taken = [[] for _ in range(NUM_WORKERS)]
@@ -1050,7 +1040,29 @@ def main(random, ag):
     print("Final score: ", finalScore)
     return finalScore
 
-def runAgents(random, ag):
+def getScores(random, ag):
+    pygame.init()
+    print("RANDOM: ", random, " AGENT: ", ag)
+    window = pygame.display.set_mode((s_width, s_height))
+    print(f'Worker process {os.getpid()} started')
+    try: 
+        qnet.load_state_dict(torch.load("model_weights.pth"))
+    except FileNotFoundError:
+        print("Model weights not found. Training a new model...")
+        for param in qnet.parameters():
+            torch.nn.init.normal_(param)
+    # Load the shared weights into the local Q-network
+    qnet.load_state_dict(qnet.state_dict())
+    finalScore = game_logic(window, qnet.parameters(), 0, 0, random, ag, False)
+    finalScore = getFinalScore()
+    print("Final score: ", finalScore)
+    return finalScore
+
+def getLoss(i, x):
+    global epsilon
+    epsilon = x - (i / 100)
+    if epsilon < 0.00:
+        epsilon = 0.00
     pygame.init()
     window = pygame.display.set_mode((s_width, s_height))
     print(f'Worker process {os.getpid()} started')
@@ -1062,11 +1074,16 @@ def runAgents(random, ag):
             torch.nn.init.normal_(param)
     # Load the shared weights into the local Q-network
     qnet.load_state_dict(qnet.state_dict())
-    finalScore = game_logic(window, qnet.parameters(), 0, 0, random, ag)
-    print("Final score: ", finalScore)
-    finalScore = getFinalScore()
-    print("Final score: ", finalScore)
-    return finalScore
+    # Create a copy of the Q-network weights in shared memory
+    shared_weights = qnet.state_dict()
+    for tensor in shared_weights.values():
+        tensor.share_memory_()
+
+    moves,losses = game_logic(window, shared_weights, i, 0, False, False, True)
+    
+    torch.save(qnet.state_dict(), "model_weights.pth")
+    print("Training complete")
+    return moves,losses
 
 
     
