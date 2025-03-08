@@ -1,7 +1,6 @@
 # Tetris
 Tetris game made with the Pygame library in Python. This project is a fork of [this repo](https://github.com/rajatdiptabiswas/tetris-pygame) with additional features like ghost placement, improved scoring system and a working AI with a genetic algorithm for parameter tuning.
 
-
 ## Installing
 Download the Python 3 installer package from the official website and install it, if not installed previously.
 
@@ -10,23 +9,24 @@ Run the following in the terminal to install the Pygame library
 pip3 install pygame
 ```
 
-
 Another alternative would be to import the contents of the repository in a PyCharm project.
 The Pygame library can be installed in a virtual environment of PyCharm using the steps mentioned [here](https://www.jetbrains.com/help/pycharm/installing-uninstalling-and-upgrading-packages.html).
-
 
 ## Running the application
 Download the source code from the repository and run the file just as any other Python script (.py) file.
 ```
 python3 Tetris.py
 ```
-
+You can press the A key to toggle the AI player on/off.
 ## Screenshots
 
-![1](https://github.com/rajatdiptabiswas/tetris-pygame/blob/master/screenshot-start.png)
+![1](https://github.com/user-attachments/assets/7d85d864-a730-40ea-9548-d804ed9ac3a9)
+*Video of Genetic algorithm*
+
+![2](https://github.com/rajatdiptabiswas/tetris-pygame/blob/master/screenshot-start.png)
 *Startup screen*
 
-![2](https://github.com/rajatdiptabiswas/tetris-pygame/blob/master/screenshot-active.png)
+![3](https://github.com/rajatdiptabiswas/tetris-pygame/blob/master/screenshot-active.png)
 *Active game screen*
 
 
