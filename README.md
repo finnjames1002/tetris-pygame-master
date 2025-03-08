@@ -20,13 +20,17 @@ python3 Tetris.py
 You can press the A key to toggle the AI player on/off.
 ## Screenshots
 
-![1](https://github.com/user-attachments/assets/7d85d864-a730-40ea-9548-d804ed9ac3a9)
+
+
+https://github.com/user-attachments/assets/9ac18da1-222e-4272-89c9-52e9bb18df08
+
+
 *Video of Genetic algorithm*
 
-![2](https://github.com/rajatdiptabiswas/tetris-pygame/blob/master/screenshot-start.png)
+![1](https://github.com/rajatdiptabiswas/tetris-pygame/blob/master/screenshot-start.png)
 *Startup screen*
 
-![3](https://github.com/rajatdiptabiswas/tetris-pygame/blob/master/screenshot-active.png)
+![2](https://github.com/rajatdiptabiswas/tetris-pygame/blob/master/screenshot-active.png)
 *Active game screen*
 
 
