@@ -1,10 +1,12 @@
 import random
 from shutil import move
-from ANN import getLoss, main, getScores
+from ANN import getLoss, getScores
+from Genetic import main as ga_main
 
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.pyplot import scatter
+import matplotlib.ticker as ticker
 
 def run_experiment(num_games):
     scores_agent1 = []
@@ -22,9 +24,17 @@ def run_experiment(num_games):
         scores_agent2.append(ANN)
         scores_agent3.append(OptimalMoves)
 
-    plt.plot(game_numbers, scores_agent1, label='Agent 1')
-    plt.plot(game_numbers, scores_agent2, label='Agent 2')
-    plt.plot(game_numbers, scores_agent3, label='Agent 3')
+    jitter = 20 
+    scores_agent1 = [score + random.uniform(-jitter, jitter) for score in scores_agent1]
+    scores_agent2 = [score + random.uniform(-jitter, jitter) for score in scores_agent2]
+    scores_agent3 = [score + random.uniform(-jitter, jitter) for score in scores_agent3]
+
+    ax = plt.gca()
+    ax.xaxis.set_major_locator(ticker.MaxNLocator(integer=True))  # Ensure x-axis has integer ticks
+
+    plt.scatter(game_numbers, scores_agent1, label='Random Moves')
+    plt.scatter(game_numbers, scores_agent2, label='ANN Agent')
+    plt.scatter(game_numbers, scores_agent3, label='GA Agent')
     plt.xlabel('Game')
     plt.ylabel('Score')
     plt.legend()
@@ -112,6 +122,38 @@ def run_ann(num_games):
     std_dev = np.std([avg_moves, total_rewards])
     print('Standard deviation:', std_dev)
 
+def run_ga():
+    best_fitnesses = []
+    average_fitnesses = []
+    diversity = []
+    game_num = 0
+
+    best_fitnesses, average_fitnesses, diversity, game_num = ga_main(0)
+    game_numbers = list(range(1, game_num + 1))  # List of game numbers
+    
+    plt.figure()
+    plt.plot(game_numbers, best_fitnesses, label='Best Fitnesses')
+    plt.xlabel('Game')
+    plt.ylabel('Best Fitness')
+    plt.legend()
+    plt.savefig('best_fitness.png')
+
+    plt.figure()
+    plt.plot(game_numbers, average_fitnesses, label='Average Fitnesses')
+    plt.xlabel('Game')
+    plt.ylabel('Average Fitness')
+    plt.legend()
+    plt.savefig('average_fitness.png')
+
+    plt.figure()
+    plt.plot(game_numbers, diversity, label='Diversity') 
+    plt.xlabel('Game')
+    plt.ylabel('Diversity')
+    plt.legend()
+    plt.savefig('diversity.png')
+
+    plt.close()
+
 if __name__ == '__main__':
     num_games = 50
-    run_ann(num_games)
+    run_experiment(num_games)

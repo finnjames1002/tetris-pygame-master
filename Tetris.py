@@ -544,8 +544,7 @@ def evaluate_position(grid, piece, x, rotation):
     holes = get_holes(grid_copy)
     bumpiness = get_bumpiness(grid_copy)
 
-    # These weights can be tweaked depending on what you want the AI to prioritize
-    return -0.688 * height + 0.267 * complete_lines + 0.062 * holes - 0.1 * bumpiness
+    return -0.767 * height + 0.414 * complete_lines + -0.095 * holes + -0.26 * bumpiness
 
 def find_optimal_move(grid, piece):
     best_score = -float('inf')

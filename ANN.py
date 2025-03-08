@@ -53,7 +53,7 @@ class CustomNet(nn.Module):
         self.conv6 = nn.Conv2d(128, 128, 3, padding=1)
 
         # Calculate the total number of features after the convolutional layers
-        total_features = 25600  # Adjust this value based on your specific case
+        total_features = 25600 
 
         self.fc1 = nn.Linear(total_features, 128)
         self.fc2 = nn.Linear(128, 512)
@@ -727,11 +727,11 @@ def game_logic(window, parameters, episode, id, randomize, agent, ml, step):
     draw_text_middle('You Lost', 40, (255, 255, 255), window)
     pygame.display.update()
     if not ml:
-        return [], quit, step
+        return finalScore
     else:
         return actions_taken, losses, finalScore, totalReward
 
-# Initialize your PyTorch model
+# Initialize PyTorch model
 #qnet = QNet(10,4)
 qnet = CustomNet(10,4)
 target_qnet = CustomNet(10,4)
@@ -742,27 +742,13 @@ criterion = nn.MSELoss()
 model_path = "model_weights.pth"
 
 def epsilon_greedy(grid, piece, epsilon, moves, randomize, agent):
-    if randomize and moves < 2000:
+    if randomize:
         actions = []
         actions.append(np.random.randint(0, 3))  # Move left or right
         return actions
-    if randomize and moves >= 2000:
-        actions = []
-        actions.append(3)  # Move left or right
-        return actions, False, 0, 0
-    if agent and moves < 2000:
+    if agent:
         best_x, best_rotation =  find_optimal_move(grid, piece)  # Take the best action
         return generate_actions(piece.x, piece.rotation, best_x, best_rotation)
-    if agent and moves >= 2000:
-        actions = []
-        actions.append(3)
-    if random.random() < epsilon and moves < 1250:
-        actions = []
-        actions.append(np.random.randint(0, 3))  # Move randomly
-        return actions
-        best_x, best_rotation =  find_optimal_move(grid, piece)  # Take the best action
-        return generate_actions(piece.x, piece.rotation, best_x, best_rotation)
-        
     else:
         with torch.no_grad():
             # Convert to tensor and flatten
@@ -852,7 +838,7 @@ def calculate_reward(next_grid, copy_piece):
     # Compute the scaled reward
     reward = (-0.2 * scaled_height) + (0.7 * scaled_complete_lines) + (0.1 * scaled_completeness) + (-0.3 * scaled_holes) + (-0.2 * scaled_bumpiness) + (-0.8 * scaled_col_heights)
 
-    # Further normalization (optional)
+    # Further normalization
     expected_min_reward = -1.0
     expected_max_reward = 1.0
     normalized_reward = (reward - expected_min_reward) / (expected_max_reward - expected_min_reward)
@@ -862,7 +848,7 @@ def calculate_reward(next_grid, copy_piece):
 def create_state(grid):
     grid_height = 20
     grid_width = 10
-    default_value = 0  # Change this to the grayscale value that represents an empty cell
+    default_value = 0 
     # Check if grid is already in the correct format
     if isinstance(grid[0], list):
         grid_for_ann = grid
@@ -950,7 +936,6 @@ def worker(qnet, shared_weights, experiences_queue, ep, id, random, ag):
         experiences, quit, step = game_logic(window, qnet.parameters(), episode, id, random, ag, False, step)
         if quit:
             break
-        # Send the experiences to the main process
         for experience in experiences:
             grid = experience[0]
             next_grid = experience[1]
@@ -981,13 +966,12 @@ def worker(qnet, shared_weights, experiences_queue, ep, id, random, ag):
     pygame.quit()
     os._exit(0)
     
-MAX_EPISODES = 100
+MAX_EPISODES = 1
 NUM_WORKERS = 1
 epsilon = 0.0
 actions_taken = [[] for _ in range(NUM_WORKERS)]
 def main(random, ag):
     global epsilon
-    
     # Load the trained model weights
     try: 
         qnet.load_state_dict(torch.load("model_weights.pth"))
@@ -1041,7 +1025,7 @@ def getScores(random, ag):
         print("Model weights not found. Training a new model...")
         for param in qnet.parameters():
             torch.nn.init.normal_(param)
-    
+    qnet.eval()
     # Load the shared weights into the local Q-network
     qnet.load_state_dict(qnet.state_dict())
     finalScore = game_logic(window, qnet.parameters(), 0, 0, random, ag, False, 0)
